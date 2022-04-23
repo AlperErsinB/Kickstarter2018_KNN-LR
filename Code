@@ -1,0 +1,368 @@
+import pandas as pd
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+df = pd.read_csv('original.csv')
+
+df.head()
+
+
+df.describe().T
+
+
+df.shape
+
+
+df = df.drop(columns = ['pledged', 'goal', 'usd pledged'])
+df.shape
+
+
+
+print(df.dtypes)
+
+
+df['launched'] = pd.to_datetime(df.launched)
+df['deadline'] = pd.to_datetime(df.deadline)
+
+
+df.info()
+
+
+# Missing Value Control
+print(df.isna().sum()) # check for NAs
+index_MV = df[df.name.isna()].index
+
+# I created new variable called index_MV, because i will delete these values later. This means Missing Value
+
+
+print(df.launched.sort_values().head(7))
+
+# There are some dates that started in 1970. But we know Kickstarter founded in 2009. There are some problems.
+
+
+index_OLD = df.launched.sort_values()[0:7].index
+# I created new variable called index_OL, because i will delete these values later. This means: OutLiers Date
+
+
+success = df[df['usd_pledged_real'] >= df['usd_goal_real']] 
+wrong = success[success['state']=='failed']
+# There are some problems.if usd_pledged_real = usd_goal_real projecs is successful. But 6 value is not. This an error.
+#I will create a new variable called index_E. This means: Error
+
+
+index_E = wrong.index
+wrong.head()
+
+undefined = df[df['state'] == 'undefined']
+print(undefined.country.unique())
+#In order to detected undefined states, I will created new variable called index_UD. 
+
+
+index_UD = df[df.country == 'N,0"'].index
+
+
+
+#And I will delete these values that I created as an index.
+allindexes_remove = list(index_MV) + list(index_OLD) + list(index_E) + list(index_UD)
+print(len(set(allindexes_remove))) 
+print(len(allindexes_remove) == len(set(allindexes_remove)))
+df_cleaned = df.drop(labels=allindexes_remove)
+df_cleaned.shape
+
+
+#I will create a few new features to drill down into the analysis of the data and prepare a better modeling.
+# project_length : The numbers of days between a projects launch date and deadline
+# percent_funded: This feature represents the percentage of the target amount reached.
+# pledged_per_backer : This feature represents the mean amount of money (converted to USD) pledged by each individual backer. 
+# To avoid bias in the prediction model, I will delete rows with 0 backers and 0 values per commit.
+
+
+
+# project length
+df_cleaned['deadline'] = pd.to_datetime(df_cleaned.deadline)
+df_cleaned['launched'] = pd.to_datetime(df_cleaned.launched)
+df_cleaned['project_length'] = df_cleaned['deadline'] - df_cleaned['launched']
+df_cleaned['project_length'] = df_cleaned.project_length.dt.days
+
+# pledged per backer
+df_cleaned['pledged_per_backer'] = df_cleaned['usd_pledged_real'] / df_cleaned['backers']
+df_cleaned = df_cleaned[~df_cleaned.isin([np.nan, np.inf, -np.inf]).any(1)] #51,804 rows removed
+
+# percent funded
+df_cleaned['percent_funded'] = np.round((df_cleaned['usd_pledged_real'] / df_cleaned['usd_goal_real']),4)
+
+print(df_cleaned.shape)
+df_cleaned.head()
+
+
+
+df_cleaned.state.value_counts()
+
+
+# In this project I will only be concerned with the success or failure of the situation.
+# Ongoing or suspended projects will disrupt the learning of our model in the future.
+df_cleaned = df_cleaned[(df_cleaned['state'] == 'failed') | (df_cleaned['state'] == 'successful')]
+df_cleaned.shape
+
+
+
+df_cleaned.state.value_counts(normalize = True)
+
+
+
+# Let's take a look at the statistics
+df_cleaned.get(['backers','usd_pledged_real','usd_goal_real','pledged_per_backer','percent_funded']).describe().T
+
+
+
+# Now let's dig a little deeper
+# First, let's rate by category for success.
+grouped = df_cleaned.groupby(['main_category','state']).ID.count()
+total = df_cleaned.groupby('main_category').state.count()
+prop = np.round((grouped/total),2).unstack().sort_values(by='successful')
+prop
+
+
+# Next up, there's the visualization
+prop.plot(kind='bar',stacked=True)
+plt.title('Comparison of Successful and Unsuccessful Projects by Main Category')
+plt.ylabel('Failure Rate (%)')
+plt.xlabel('Main Category')
+plt.legend(loc='upper right',bbox_to_anchor=(1.5, 1.5))
+plt.show()
+
+
+# First, I created a simple ranking table, and then I wanted to visualize the situation as a report.
+#While Crafts, Journalism, Technology have the lowest success rates, we can see that the top 3 main categories with the highest success rates are Dance, Theater and Comics.
+
+
+
+freq_category = sns.countplot(df_cleaned.main_category,order = df_cleaned['main_category'].value_counts().index)
+freq_category.set_xticklabels(freq_category.get_xticklabels(), rotation=50,horizontalalignment='right')
+freq_category.set_title("Frequency Project v.s. Category")
+freq_category.set(xlabel='Main Category', ylabel='Count')
+
+plt.show()
+
+
+
+
+#When we switch to Seaborn and create another image, we can see that the most popular categories are Movie and Video, followed by Music, Publishing and Games. The least popular categories on Kickstarter are Journalism, Dance, and Crafts. We see that the categories with the highest success rate are also those with the lowest number of projects (Dance, Journalism, Handicrafts).
+Here we can stop and think. Is there a relationship between the number of projects and the category success rate?
+
+
+df_sr = pd.DataFrame({'category':prop.index.tolist(),'success_rate': prop.get('successful')})
+
+df_c = pd.DataFrame({'category':df_cleaned.main_category.value_counts().index.tolist(),
+                    'count': df_cleaned.main_category.value_counts()})
+
+df_m = pd.merge(df_sr,df_c)
+
+df_m.plot(kind='scatter',x='count',y='success_rate')
+plt.title('Category Success Rate v.s. Number of Projects in Category')
+plt.ylabel('Category Overall Success Rate (%)')
+plt.xlabel('Number of Projects in Category')
+plt.show()
+
+df_m.corr()
+
+
+
+
+pledged = df_cleaned.groupby(['main_category']).backers.sum().sort_values(ascending=False)
+pledged.plot(kind="bar")
+plt.title("Number of Backers v.s. Category")
+plt.ylabel('Number of Backers')
+plt.xlabel('Main Category')
+plt.show()
+
+
+
+
+
+avg_pledged = df_cleaned.groupby(['main_category']).usd_pledged_real.mean().sort_values(ascending=False)
+avg_pledged
+avg_pledged.plot(kind="bar")
+plt.title("Average Amount Pledged v.s. Category")
+plt.ylabel('Average Amount Pledged (USD)')
+plt.xlabel('Main Category')
+plt.show()
+
+
+
+df_cleaned['percent_funded'].describe()
+
+
+np.percentile(df_cleaned['percent_funded'],99)
+
+
+
+highly_funded = df_cleaned['percent_funded'] > np.percentile(df_cleaned['percent_funded'],99)
+highly_funded_kickstarters = df_cleaned[highly_funded].sort_values(by='percent_funded',ascending=False)
+highly_funded_kickstarters.head()
+
+
+highly_funded_kickstarters.corr()
+
+
+highly_funded_kickstarters['usd_goal_real'].value_counts(sort=True).head(10)
+
+
+
+low_goal = highly_funded_kickstarters[highly_funded_kickstarters['usd_goal_real'] <= 10]
+low_goal.head()
+
+
+low_goal.main_category.value_counts()
+
+
+
+reasonable_goal = (df_cleaned['percent_funded'] > np.percentile(df_cleaned['percent_funded'],99)) & (df_cleaned['usd_goal_real'] >= 50)
+
+new_highly_funded = df_cleaned[reasonable_goal]
+new_highly_funded.sort_values(by='percent_funded',ascending=False).head()
+
+
+
+new_highly_funded.main_category.value_counts()
+
+
+
+grouped = new_highly_funded.groupby('main_category').ID.count()
+total = df_cleaned.groupby('main_category').ID.count()
+prop = (grouped/total).sort_values(ascending=False)
+prop
+
+
+
+boxplot = sns.boxplot(x="main_category", y="usd_pledged_real", data=df_cleaned)
+boxplot.set_xticklabels(boxplot.get_xticklabels(), rotation=50,horizontalalignment='right')
+boxplot.set_title("Boxplot of Main Category vs The Amount Pledged")
+boxplot.set_ylabel("The Amount Pledged (USD)")
+boxplot.set_xlabel("Main Category")
+plt.show()
+
+
+
+vs1 = df_cleaned.groupby(['main_category','state']).usd_goal_real.median().unstack()
+vs1.plot(kind='bar')
+plt.title("Average Project Goal v.s. Category")
+plt.ylabel("Average Project Goal")
+plt.xlabel("Main Category")
+plt.legend(bbox_to_anchor=(1.01, 1), loc='upper left', ncol=1)
+plt.show()
+
+
+
+vs2 = df_cleaned.groupby(['main_category','state']).pledged_per_backer.mean().unstack()
+vs2.plot(kind="bar") 
+plt.title("Average pledged per Backer by Category")
+plt.ylabel("Average Pledged per Backer")
+plt.xlabel("Main Category")
+plt.legend(bbox_to_anchor=(1.09, 1.08), loc='upper left', ncol=1)
+plt.show()
+
+
+
+vs3 = df_cleaned.groupby(['main_category','state']).project_length.mean().unstack()
+vs3.plot(kind='bar')
+plt.title("Average Project Length v.s. Category")
+plt.ylabel("Average Project Length")
+plt.xlabel("Main Category")
+plt.legend(bbox_to_anchor=(1.01, 1), loc='upper left', ncol=1)
+plt.show()
+
+
+
+from sklearn.model_selection import train_test_split, ShuffleSplit, cross_val_score, KFold
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn import metrics
+import statsmodels.formula.api as smf
+from statsmodels.tools.tools import add_constant
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+
+new_state = {'state': {'failed': 0, "successful": 1}}
+df_cleaned.replace(new_state, inplace=True)
+
+
+X_trainT, X_testT, y_trainT, y_testT = train_test_split(df_cleaned[['usd_goal_real','project_length','pledged_per_backer']], df_cleaned[['state']], test_size=0.3)
+
+
+# I tried k values in the ranges (1-20), (1-30), (1-50) and determined the range as 36, as I saw the highest k value at the rate of 0.74 in the 35th row.
+k_range = range(1,36)
+scores = {}
+for k in k_range:
+    knn = KNeighborsClassifier(n_neighbors = k)
+    scores[k] = np.mean(cross_val_score(knn, X_trainT, y_trainT, cv=5))
+    
+    
+scores
+
+
+knn = KNeighborsClassifier(n_neighbors = 36)
+knn.fit(X_trainT,y_trainT)
+
+y_pred = knn.predict(X_testT)
+print(metrics.accuracy_score(y_testT, y_pred))
+print(y_testT.state.value_counts().iloc[0]/(y_testT.state.value_counts().iloc[0] + y_testT.state.value_counts().iloc[1]))
+
+
+X_trainT, X_testT, y_trainT, y_testT = train_test_split(df_cleaned[['main_category','usd_goal_real','project_length','pledged_per_backer']], df_cleaned[['state']], test_size=0.3)
+train_data_set = pd.concat([X_trainT,y_trainT], axis = 1)
+
+
+
+X = train_data_set[['main_category','usd_goal_real','project_length','pledged_per_backer']].reset_index()
+y = train_data_set[['state']].reset_index()
+kf = KFold(n_splits = 5, shuffle = True, random_state = 1)
+accuracies = []
+default= []
+
+for train_index, test_index in kf.split(X):
+    X_train, X_test, y_train, y_test = X.loc[train_index], X.loc[test_index], y.loc[train_index], y.loc[test_index]
+    y_train['state'] = y_train.state.apply(int)
+    y_test['state'] = y_test.state.apply(int)
+    logitmodel = smf.logit(formula = 'state ~ main_category + usd_goal_real + project_length + pledged_per_backer', data = pd.concat([X_train, y_train], axis=1))
+    results = logitmodel.fit()
+    testresult_logit = results.predict(X_test)
+    testresult_logit = np.where(testresult_logit > 0.5, 1, 0)
+    accuracies.append(np.mean(testresult_logit == y_test.state.to_numpy()))
+    default.append(y_test.state.value_counts().iloc[0]/(y_test.state.value_counts().iloc[0] + y_test.state.value_counts().iloc[1]))
+    
+print(accuracies)
+print(np.mean(accuracies))
+print(default)
+print(np.mean(default))
+
+
+
+final_logitmodel = smf.logit(formula = 'state ~ main_category + usd_goal_real + project_length + pledged_per_backer', data = train_data_set)
+print(final_logitmodel.fit().summary())
+
+final_testresult_logit = results.predict(X_testT)
+final_testresult_logit = np.where(final_testresult_logit > 0.5, 1, 0)
+print(np.mean(final_testresult_logit == y_testT.state.to_numpy()))
+print(y_testT.state.value_counts().iloc[0]/(y_testT.state.value_counts().iloc[0] + y_testT.state.value_counts().iloc[1]))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
